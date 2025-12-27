@@ -145,7 +145,8 @@ namespace MediaBrowser.Controller.MediaEncoding
             { HardwareAccelerationType.vaapi, _defaultMjpegEncoder + "_vaapi" },
             { HardwareAccelerationType.qsv, _defaultMjpegEncoder + "_qsv" },
             { HardwareAccelerationType.videotoolbox, _defaultMjpegEncoder + "_videotoolbox" },
-            { HardwareAccelerationType.rkmpp, _defaultMjpegEncoder + "_rkmpp" }
+            { HardwareAccelerationType.rkmpp, _defaultMjpegEncoder + "_rkmpp" },
+            { HardwareAccelerationType.v4l2m2m, _defaultMjpegEncoder + "_v4l2m2m" }
         };
 
         public static readonly string[] LosslessAudioCodecs =
@@ -2279,6 +2280,11 @@ namespace MediaBrowser.Controller.MediaEncoding
                 {
                     param += " -level " + level;
                 }
+                else if (string.Equals(videoEncoder, "h264_v4l2m2m", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(videoEncoder, "hevc_v4l2m2m", StringComparison.OrdinalIgnoreCase))
+                {
+                    // V4L2M2M encoders do not support the level option
+                }
                 else if (!string.Equals(videoEncoder, "libx265", StringComparison.OrdinalIgnoreCase))
                 {
                     param += " -level " + level;
@@ -3792,13 +3798,21 @@ namespace MediaBrowser.Controller.MediaEncoding
 
             var outFormat = isSwDecoder ? "yuv420p" : "nv12";
             var swScaleFilter = GetSwScaleFilter(state, options, vidEncoder, swpInW, swpInH, threeDFormat, reqW, reqH, reqMaxW, reqMaxH);
+            var isV4l2MjpegEncoder = isV4l2Encoder && vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             if (isVaapiEncoder)
             {
                 outFormat = "nv12";
             }
-            else if (isV4l2Encoder)
+            else if (isV4l2Encoder && !isV4l2MjpegEncoder)
             {
+                // V4L2M2M video encoders (h264, hevc, etc.) require yuv420p
+                // but V4L2M2M MJPEG encoder requires nv12
                 outFormat = "yuv420p";
+            }
+            else if (isV4l2MjpegEncoder)
+            {
+                // V4L2M2M MJPEG encoder requires nv12 format
+                outFormat = "nv12";
             }
 
             // sw scale
