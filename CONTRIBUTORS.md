@@ -205,6 +205,8 @@
  - [theshoeshiner](https://github.com/theshoeshiner)
  - [TokerX](https://github.com/TokerX)
  - [GeneMarks](https://github.com/GeneMarks)
+ - [Kirill Nikiforov](https://github.com/allmazz)
+ - [bjorntp](https://github.com/bjorntp)
 
 # Emby Contributors
 
