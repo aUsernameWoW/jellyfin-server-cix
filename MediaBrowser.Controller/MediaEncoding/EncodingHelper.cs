@@ -285,6 +285,16 @@ namespace MediaBrowser.Controller.MediaEncoding
                    && _mediaEncoder.SupportsFilter("overlay_rkrga");
         }
 
+        private bool IsV4l2m2mOclTonemapSupported()
+        {
+            // V4L2M2M with OpenCL tonemapping support.
+            // Note: CIX SoC FFmpeg 5.1.6 tonemap_opencl doesn't support bt2390,
+            // so we only check basic OpenCL tonemap filter availability.
+            // We don't need scale_opencl since we use software scale before hwupload.
+            return _mediaEncoder.SupportsHwaccel("opencl")
+                   && _mediaEncoder.SupportsFilter("tonemap_opencl");
+        }
+
         private bool IsOpenclFullSupported()
         {
             return _mediaEncoder.SupportsHwaccel("opencl")
@@ -1226,7 +1236,15 @@ namespace MediaBrowser.Controller.MediaEncoding
 
                 // V4L2M2M doesn't require explicit hw device initialization.
                 // The decoder/encoder will auto-select the appropriate V4L2 device.
-                // Device path can be specified via encoder options if needed.
+
+                // Initialize OpenCL device for tonemapping if supported
+                var doOclTonemap = isHwTonemapAvailable && IsV4l2m2mOclTonemapSupported();
+                if (doOclTonemap)
+                {
+                    // For V4L2M2M, we use software upload to OpenCL since DMA-buf is not available
+                    args.Append(GetOpenclDeviceArgs(0, null, null, OpenclAlias));
+                    args.Append(GetFilterHwDeviceArgs(OpenclAlias));
+                }
             }
 
             if (!string.IsNullOrEmpty(vidDecoder))
@@ -5901,6 +5919,156 @@ namespace MediaBrowser.Controller.MediaEncoding
             return (null, null, null);
         }
 
+        /// <summary>
+        /// Gets the video filter chain for V4L2M2M hardware acceleration with OpenCL tonemapping.
+        /// </summary>
+        /// <param name="state">Encoding state.</param>
+        /// <param name="options">Encoding options.</param>
+        /// <param name="vidEncoder">Video encoder to use.</param>
+        /// <returns>The tuple contains three lists: main, sub and overlay filters.</returns>
+        public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetV4l2m2mVidFilterChain(
+            EncodingJobInfo state,
+            EncodingOptions options,
+            string vidEncoder)
+        {
+            if (options.HardwareAccelerationType != HardwareAccelerationType.v4l2m2m)
+            {
+                return (null, null, null);
+            }
+
+            var isLinux = OperatingSystem.IsLinux();
+            var vidDecoder = GetHardwareVideoDecoder(state, options) ?? string.Empty;
+            var isSwDecoder = string.IsNullOrEmpty(vidDecoder);
+            var isSwEncoder = !vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2m2mOclSupported = isLinux && IsV4l2m2mOclTonemapSupported();
+            var doOclTonemap = IsHwTonemapAvailable(state, options) && isV4l2m2mOclSupported;
+
+            // If no tonemapping needed or OpenCL not supported, use software filter chain
+            if (!doOclTonemap)
+            {
+                return GetSwVidFilterChain(state, options, vidEncoder);
+            }
+
+            // V4L2M2M + OpenCL tonemapping pipeline
+            return GetV4l2m2mVidFiltersPrefered(state, options, vidDecoder, vidEncoder);
+        }
+
+        /// <summary>
+        /// Gets the preferred V4L2M2M video filters with OpenCL tonemapping support.
+        /// Pipeline: V4L2M2M decode, format=p010le, hwupload=opencl, tonemap_opencl, hwdownload, V4L2M2M encode.
+        /// </summary>
+        /// <param name="state">Encoding state.</param>
+        /// <param name="options">Encoding options.</param>
+        /// <param name="vidDecoder">Video decoder to use.</param>
+        /// <param name="vidEncoder">Video encoder to use.</param>
+        /// <returns>The tuple contains three lists: main, sub and overlay filters.</returns>
+        public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetV4l2m2mVidFiltersPrefered(
+            EncodingJobInfo state,
+            EncodingOptions options,
+            string vidDecoder,
+            string vidEncoder)
+        {
+            var inW = state.VideoStream?.Width;
+            var inH = state.VideoStream?.Height;
+            var reqW = state.BaseRequest.Width;
+            var reqH = state.BaseRequest.Height;
+            var reqMaxW = state.BaseRequest.MaxWidth;
+            var reqMaxH = state.BaseRequest.MaxHeight;
+            var threeDFormat = state.MediaSource.Video3DFormat;
+
+            var isV4l2m2mDecoder = vidDecoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2m2mEncoder = vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isSwDecoder = !isV4l2m2mDecoder;
+            var isSwEncoder = !isV4l2m2mEncoder;
+            var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
+
+            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
+            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
+            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doOclTonemap = IsHwTonemapAvailable(state, options) && IsV4l2m2mOclTonemapSupported();
+
+            var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
+            var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
+            var hasGraphicalSubs = hasSubs && !state.SubtitleStream.IsTextSubtitleStream;
+
+            var rotation = state.VideoStream?.Rotation ?? 0;
+            var transposeDir = rotation == 0 ? string.Empty : GetVideoTransposeDirection(state);
+            var doSwTranspose = !string.IsNullOrEmpty(transposeDir);
+            var swapWAndH = Math.Abs(rotation) == 90 && doSwTranspose;
+            var swpInW = swapWAndH ? inH : inW;
+            var swpInH = swapWAndH ? inW : inH;
+
+            /* Make main filters for video stream */
+            var mainFilters = new List<string>();
+
+            mainFilters.Add(GetOverwriteColorPropertiesParam(state, doOclTonemap));
+
+            // V4L2M2M decodes to CPU memory, so we process in software first
+            // sw deint
+            if (doDeintH2645)
+            {
+                var swDeintFilter = GetSwDeinterlaceFilter(state, options);
+                mainFilters.Add(swDeintFilter);
+            }
+
+            // sw transpose
+            if (doSwTranspose)
+            {
+                mainFilters.Add($"transpose={transposeDir}");
+            }
+
+            // For HDR tonemapping, we need p010le format for OpenCL
+            var outFormat = doOclTonemap ? "p010le" : (hasGraphicalSubs ? "yuv420p" : "nv12");
+            var swScaleFilter = GetSwScaleFilter(state, options, vidEncoder, swpInW, swpInH, threeDFormat, reqW, reqH, reqMaxW, reqMaxH);
+
+            // sw scale
+            mainFilters.Add(swScaleFilter);
+            mainFilters.Add($"format={outFormat}");
+
+            // OpenCL tonemapping
+            if (doOclTonemap)
+            {
+                // Upload to OpenCL (using -filter_hw_device, not format=opencl)
+                mainFilters.Add("hwupload");
+
+                // Apply tonemapping
+                var tonemapFilter = GetHwTonemapFilter(options, "opencl", "nv12", isMjpegEncoder);
+                mainFilters.Add(tonemapFilter);
+
+                // Download back to CPU memory for V4L2M2M encoder
+                mainFilters.Add("hwdownload");
+                mainFilters.Add("format=nv12");
+            }
+
+            // text subtitles (after tonemapping, on CPU)
+            if (hasTextSubs)
+            {
+                var textSubtitlesFilter = GetTextSubtitlesFilter(state, false, false);
+                mainFilters.Add(textSubtitlesFilter);
+            }
+
+            /* Make sub and overlay filters for subtitle stream */
+            var subFilters = new List<string>();
+            var overlayFilters = new List<string>();
+
+            if (hasGraphicalSubs)
+            {
+                // Use software overlay for graphical subtitles
+                var subW = state.SubtitleStream?.Width;
+                var subH = state.SubtitleStream?.Height;
+                var subPreProcFilters = GetGraphicalSubPreProcessFilters(swpInW, swpInH, subW, subH, reqW, reqH, reqMaxW, reqMaxH);
+                subFilters.Add(subPreProcFilters);
+                subFilters.Add("format=bgra");
+            }
+
+            if (hasGraphicalSubs)
+            {
+                overlayFilters.Add("overlay=eof_action=pass:shortest=1:repeatlast=0");
+            }
+
+            return (mainFilters, subFilters, overlayFilters);
+        }
+
         public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetRkmppVidFiltersPrefered(
             EncodingJobInfo state,
             EncodingOptions options,
@@ -6183,6 +6351,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                 HardwareAccelerationType.nvenc => GetNvidiaVidFilterChain(state, options, outputVideoCodec),
                 HardwareAccelerationType.videotoolbox => GetAppleVidFilterChain(state, options, outputVideoCodec),
                 HardwareAccelerationType.rkmpp => GetRkmppVidFilterChain(state, options, outputVideoCodec),
+                HardwareAccelerationType.v4l2m2m => GetV4l2m2mVidFilterChain(state, options, outputVideoCodec),
                 _ => GetSwVidFilterChain(state, options, outputVideoCodec),
             };
 
