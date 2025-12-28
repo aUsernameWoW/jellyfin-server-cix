@@ -117,6 +117,7 @@
  - [sachk](https://github.com/sachk)
  - [sammyrc34](https://github.com/sammyrc34)
  - [samuel9554](https://github.com/samuel9554)
+ - [SapientGuardian](https://github.com/SapientGuardian)
  - [scheidleon](https://github.com/scheidleon)
  - [sebPomme](https://github.com/sebPomme)
  - [SegiH](https://github.com/SegiH)
@@ -207,6 +208,7 @@
  - [GeneMarks](https://github.com/GeneMarks)
  - [Kirill Nikiforov](https://github.com/allmazz)
  - [bjorntp](https://github.com/bjorntp)
+ - [martenumberto](https://github.com/martenumberto)
 
 # Emby Contributors
 
