@@ -6646,6 +6646,13 @@ namespace MediaBrowser.Controller.MediaEncoding
                 {
                     return null;
                 }
+
+                if (string.Equals(videoCodec, "av1", StringComparison.OrdinalIgnoreCase)
+                    && options.HardwareDecodingCodecs.Contains("av1", StringComparison.OrdinalIgnoreCase)
+                    && !options.EnableDecodingColorDepth10Av1)
+                {
+                    return null;
+                }
             }
 
             if (string.Equals(decoderSuffix, "cuvid", StringComparison.OrdinalIgnoreCase) && options.EnableEnhancedNvdecDecoder)

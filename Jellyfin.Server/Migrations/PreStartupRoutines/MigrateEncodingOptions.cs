@@ -127,6 +127,7 @@ public class MigrateEncodingOptions : IMigrationRoutine
             DeinterlaceMethod = deinterlaceMethod,
             EnableDecodingColorDepth10Hevc = oldConfig.EnableDecodingColorDepth10Hevc,
             EnableDecodingColorDepth10Vp9 = oldConfig.EnableDecodingColorDepth10Vp9,
+            EnableDecodingColorDepth10Av1 = oldConfig.EnableDecodingColorDepth10Av1,
             EnableEnhancedNvdecDecoder = oldConfig.EnableEnhancedNvdecDecoder,
             PreferSystemNativeHwDecoder = oldConfig.PreferSystemNativeHwDecoder,
             EnableIntelLowPowerH264HwEncoder = oldConfig.EnableIntelLowPowerH264HwEncoder,
@@ -215,6 +216,8 @@ public class MigrateEncodingOptions : IMigrationRoutine
         public bool EnableDecodingColorDepth10Hevc { get; set; }
 
         public bool EnableDecodingColorDepth10Vp9 { get; set; }
+
+        public bool EnableDecodingColorDepth10Av1 { get; set; }
 
         public bool EnableEnhancedNvdecDecoder { get; set; }
 
