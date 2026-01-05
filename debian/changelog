@@ -1,0 +1,8 @@
+jellyfin-server-cix (10.12.0-cix1) unstable; urgency=medium
+
+  * Initial release of jellyfin-server-cix with V4L2M2M hardware acceleration
+  * Added V4L2M2M encoder/decoder support for CIX SoC
+  * Added OpenCL tonemapping support for HDR to SDR conversion
+  * Added V4L2M2M MJPEG support for Trickplay thumbnail generation
+
+ -- Jellyfin CIX Team <noreply@example.com>  Sun, 05 Jan 2026 00:00:00 +0000

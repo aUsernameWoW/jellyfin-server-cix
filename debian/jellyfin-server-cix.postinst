@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Create jellyfin user and group
+        if ! getent group jellyfin > /dev/null; then
+            addgroup --quiet --system jellyfin
+        fi
+        if ! getent passwd jellyfin > /dev/null; then
+            adduser --quiet --system --ingroup jellyfin --no-create-home \
+                --home /var/lib/jellyfin --shell /usr/sbin/nologin jellyfin
+        fi
+
+        # Add jellyfin user to video and render groups for hardware acceleration
+        usermod -aG video jellyfin 2>/dev/null || true
+        usermod -aG render jellyfin 2>/dev/null || true
+
+        # Create required directories
+        for dir in /var/lib/jellyfin /var/log/jellyfin /var/cache/jellyfin /etc/jellyfin; do
+            mkdir -p "$dir"
+            chown jellyfin:jellyfin "$dir"
+            chmod 755 "$dir"
+        done
+
+        # Create symlink to jellyfin binary
+        ln -sf /usr/lib/jellyfin/bin/jellyfin /usr/bin/jellyfin || true
+
+        # Enable and start service
+        if command -v systemctl > /dev/null; then
+            systemctl daemon-reload
+            if [ -z "${DISABLE_JELLYFIN_AUTOSTART:-}" ]; then
+                systemctl enable jellyfin.service
+                systemctl start jellyfin.service || true
+            fi
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

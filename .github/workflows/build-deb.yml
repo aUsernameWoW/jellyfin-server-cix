@@ -1,0 +1,103 @@
+name: Build Debian Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: 'Version suffix (e.g., cix1, cix2)'
+        required: false
+        default: 'cix1'
+
+env:
+  DOTNET_VERSION: '9.0.x'
+  VERSION: '10.12.0'
+
+jobs:
+  build-deb:
+    name: Build Debian Package (arm64)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper devscripts fakeroot
+
+      - name: Update changelog version
+        run: |
+          sed -i "s/10.12.0-cix1/${{ env.VERSION }}-${{ github.event.inputs.version_suffix || 'cix1' }}/" debian/changelog
+
+      - name: Build Debian package
+        run: |
+          dpkg-buildpackage -us -uc -b
+
+      - name: Move artifacts
+        run: |
+          mkdir -p artifacts
+          mv ../jellyfin-server-cix_*.deb artifacts/
+          ls -la artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-server-cix-deb
+          path: artifacts/*.deb
+
+  release:
+    name: Create Release
+    needs: build-deb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: jellyfin-server-cix-deb
+          path: artifacts
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}-${{ github.event.inputs.version_suffix || 'cix1' }}-${{ steps.date.outputs.date }}
+          name: Jellyfin Server CIX v${{ env.VERSION }}-${{ github.event.inputs.version_suffix || 'cix1' }}
+          body: |
+            ## Jellyfin Server CIX
+
+            This release includes Jellyfin Media Server with V4L2M2M hardware acceleration support for CIX SoC.
+
+            ### Features
+            - V4L2M2M hardware encoding/decoding (H.264, HEVC, VP8, VP9, AV1)
+            - OpenCL HDR to SDR tonemapping
+            - V4L2M2M MJPEG for Trickplay thumbnail generation
+
+            ### Installation
+            ```bash
+            sudo dpkg -i jellyfin-server-cix_*.deb
+            sudo apt-get install -f
+            ```
+
+            ### FFmpeg Dependency
+            **Important**: This package requires `ffmpeg-cix` with V4L2M2M support.
+            The ffmpeg-cix Debian deb package can be found at:
+            https://github.com/radxa-pkg/cix-prebuilt/releases
+
+            ### Related Packages
+            - `jellyfin-web-cix` - Web interface
+            - `ffmpeg-cix` - FFmpeg with V4L2M2M support
+          files: artifacts/*.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
