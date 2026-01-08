@@ -5,8 +5,8 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/default/jellyfin
-User=${JELLYFIN_USER}
-Group=${JELLYFIN_USER}
+User=jellyfin
+Group=jellyfin
 WorkingDirectory=/var/lib/jellyfin
 ExecStart=/usr/lib/jellyfin/bin/jellyfin ${JELLYFIN_ARGS}
 Restart=on-failure

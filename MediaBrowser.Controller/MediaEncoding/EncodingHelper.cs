@@ -2298,8 +2298,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                 {
                     param += " -level " + level;
                 }
-                else if (string.Equals(videoEncoder, "h264_v4l2m2m", StringComparison.OrdinalIgnoreCase)
-                         || string.Equals(videoEncoder, "hevc_v4l2m2m", StringComparison.OrdinalIgnoreCase))
+                else if (videoEncoder is not null && videoEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase))
                 {
                     // V4L2M2M encoders do not support the level option
                 }
