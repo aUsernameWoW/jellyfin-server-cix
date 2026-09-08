@@ -1,0 +1,22 @@
+Source: jellyfin-server-cix
+Section: misc
+Priority: optional
+Maintainer: Jellyfin CIX Packaging Team
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.4
+Homepage: https://github.com/radxa-pkg/cix-prebuilt
+
+Package: jellyfin-server-cix
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, libfontconfig1, adduser
+Recommends: jellyfin-web-cix
+Suggests: ffmpeg-cix
+Conflicts: jellyfin-server
+Replaces: jellyfin-server
+Provides: jellyfin-server
+Description: Jellyfin Media Server with CIX V4L2M2M hardware acceleration
+ Jellyfin is a Free Software Media System that puts you in control of managing
+ and streaming your media.
+ .
+ This fork includes custom V4L2M2M hardware acceleration support for CIX SoC,
+ enabling hardware-accelerated video encoding and decoding.

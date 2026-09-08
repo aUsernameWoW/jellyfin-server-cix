@@ -1,0 +1,20 @@
+[Unit]
+Description=Jellyfin Media Server (CIX)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/jellyfin
+User=jellyfin
+Group=jellyfin
+WorkingDirectory=/var/lib/jellyfin
+ExecStart=/usr/lib/jellyfin/bin/jellyfin ${JELLYFIN_WEB_OPT} ${JELLYFIN_FFMPEG_OPT} ${JELLYFIN_SERVICE_OPT} ${JELLYFIN_NOWEBAPP_OPT} ${JELLYFIN_ADDITIONAL_OPTS} --datadir ${JELLYFIN_DATA_DIR} --configdir ${JELLYFIN_CONFIG_DIR} --logdir ${JELLYFIN_LOG_DIR} --cachedir ${JELLYFIN_CACHE_DIR}
+Restart=on-failure
+TimeoutStopSec=15
+SuccessExitStatus=143
+
+# Hardware access for V4L2M2M
+SupplementaryGroups=video render
+
+[Install]
+WantedBy=multi-user.target

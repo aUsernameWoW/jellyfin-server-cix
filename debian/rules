@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export DOTNET_CLI_TELEMETRY_OPTOUT = 1
+export DOTNET_NOLOGO = 1
+export DOTNET_SKIP_FIRST_TIME_EXPERIENCE = 1
+
+RUNTIME = linux-arm64
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	dotnet publish Jellyfin.Server \
+		--configuration Release \
+		--self-contained \
+		--runtime $(RUNTIME) \
+		--output build/usr/lib/jellyfin/bin \
+		-p:DebugSymbols=false \
+		-p:DebugType=none
+	# Remove debug and tracing libraries
+	rm -f build/usr/lib/jellyfin/bin/*.pdb || true
+	rm -f build/usr/lib/jellyfin/bin/libLttngUstTracerNativeMethods.so || true
+
+override_dh_auto_clean:
+	dotnet clean Jellyfin.sln -maxcpucount:1 || true
+	rm -rf build
+
+override_dh_shlibdeps:
+	# Skip shlibdeps for self-contained .NET app
+
+override_dh_strip:
+	# Skip strip for .NET assemblies

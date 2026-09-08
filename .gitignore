@@ -282,3 +282,12 @@ mono_crash.*.json
 # Devcontainer temp files
 .devcontainer/devcontainer-lock.json
 dotnet/
+
+# Debian packaging build artifacts
+debian/.debhelper/
+debian/files
+debian/debhelper-build-stamp
+debian/*.substvars
+debian/jellyfin-server-cix/
+build/
+publish/

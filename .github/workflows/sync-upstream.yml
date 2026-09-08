@@ -1,0 +1,135 @@
+name: Sync Upstream Release
+
+# Polls the upstream repository for the latest stable release, merges it into the
+# rolling CIX branch, and (on success) triggers a package build + release with the
+# matching version. Conflicts abort the merge and open an issue.
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Upstream tag to sync (default: latest stable release)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: jellyfin/jellyfin
+  CIX_BRANCH: cix
+  PACKAGE_REVISION: cix1
+
+jobs:
+  sync:
+    name: Merge latest upstream stable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CIX_BRANCH }}
+          fetch-depth: 0
+
+      - name: Resolve upstream tag
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          fi
+          if [ -z "$TAG" ]; then
+            # No GitHub release: fall back to the highest stable-looking tag.
+            TAG="$(git ls-remote --tags --refs "https://github.com/${UPSTREAM_REPO}.git" 'v*' \
+                   | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -n 1)"
+          fi
+          BASE="$(cat .github/upstream-base)"
+          echo "Upstream latest: $TAG, current base: $BASE"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          if [ -z "$TAG" ] || [ "$TAG" = "$BASE" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream tag
+        id: merge
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/tags/${TAG}"
+          if git merge --no-ff --no-edit -m "chore: merge upstream ${TAG}" "$TAG"; then
+            echo "$TAG" > .github/upstream-base
+            git add .github/upstream-base
+            git commit -m "chore: bump upstream base to ${TAG}"
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on conflict
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          TITLE="Upstream sync conflict: ${TAG}"
+          EXISTING="$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number')"
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #${EXISTING} already open"
+          else
+            BODY="$(cat <<MSG
+          Automatic merge of upstream \`${TAG}\` into \`${CIX_BRANCH}\` failed.
+
+          Conflicting files:
+          \`\`\`
+          $(cat /tmp/conflicts.txt)
+          \`\`\`
+
+          Resolve manually:
+          \`\`\`bash
+          git fetch upstream tag ${TAG}
+          git checkout ${CIX_BRANCH}
+          git merge ${TAG}
+          # fix conflicts, then
+          echo ${TAG} > .github/upstream-base
+          git commit -am "chore: merge upstream ${TAG}"
+          git push
+          \`\`\`
+          Then run the **Build Debian Package** workflow (or push tag \`v${TAG#v}-${PACKAGE_REVISION}\`).
+          MSG
+          )"
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+          exit 1
+
+      - name: Push and trigger package build
+        if: steps.merge.outputs.result == 'merged'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          git push origin "HEAD:${CIX_BRANCH}"
+          VER="${TAG#v}"
+          case "$VER" in *.*.*) ;; *) VER="${VER}.0" ;; esac
+          echo "Triggering build for ${VER}-${PACKAGE_REVISION}"
+          gh workflow run build-deb.yml --ref "$CIX_BRANCH" \
+            -f "version=${VER}-${PACKAGE_REVISION}" -f "release=true"

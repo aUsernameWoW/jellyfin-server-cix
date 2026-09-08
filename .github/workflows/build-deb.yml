@@ -1,0 +1,143 @@
+name: Build Debian Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Debian package version, e.g. 12.0.1-cix1 (default: <upstream base>-cix1~git<date>.<sha>)'
+        required: false
+        default: ''
+      release:
+        description: 'Create a GitHub release (tag v<version>)'
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*-cix*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-deb-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
+jobs:
+  build:
+    name: Build .deb (arm64)
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve package version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            BASE="$(sed 's/^v//' .github/upstream-base)"
+            case "$BASE" in *.*.*) ;; *) BASE="$BASE.0" ;; esac
+            VERSION="${BASE}-cix1~git$(date -u +%Y%m%d).${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential debhelper devscripts fakeroot
+
+      - name: Add changelog entry
+        env:
+          DEBFULLNAME: Jellyfin CIX Team
+          DEBEMAIL: noreply@example.com
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dch --newversion "$VERSION" --distribution unstable --force-distribution --force-bad-version \
+            "Automated build from upstream $(cat .github/upstream-base) (commit ${GITHUB_SHA::7})"
+          head -n 5 debian/changelog
+
+      - name: Build Debian package
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          mv ../jellyfin-server-cix_*.deb artifacts/
+          ls -la artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jellyfin-server-cix-deb
+          path: artifacts/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    if: github.event_name == 'push' || inputs.release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: jellyfin-server-cix-deb
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Jellyfin Server CIX v${{ needs.build.outputs.version }}
+          body: |
+            ## Jellyfin Server CIX
+
+            Jellyfin Media Server with V4L2M2M hardware acceleration support for CIX SoC.
+            Built from this repository at `${{ github.sha }}`.
+
+            ### Features
+            - V4L2M2M hardware decoding (H.264, HEVC, VP8, VP9, AV1, MPEG-1/2/4, VC-1) and encoding (H.264, HEVC, VP8)
+            - OpenCL HDR to SDR tonemapping
+            - V4L2M2M MJPEG for Trickplay thumbnail generation
+
+            ### Installation
+            ```bash
+            sudo dpkg -i jellyfin-server-cix_*.deb jellyfin-web-cix_*.deb
+            sudo apt-get install -f
+            ```
+
+            ### FFmpeg
+            Point `JELLYFIN_FFMPEG_OPT` in `/etc/default/jellyfin` at an FFmpeg with V4L2M2M support
+            (the CIX-patched `ffmpeg` package, or `jellyfin-ffmpeg8`).
+
+            ### Related Packages
+            - `jellyfin-web-cix` - matching web interface
+          files: artifacts/*.deb
+          draft: false
+          prerelease: false

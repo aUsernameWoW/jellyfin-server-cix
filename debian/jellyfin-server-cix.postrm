@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    purge)
+        # Remove data directories on purge
+        rm -rf /var/lib/jellyfin
+        rm -rf /var/log/jellyfin
+        rm -rf /var/cache/jellyfin
+        rm -rf /etc/jellyfin
+
+        # Remove symlink
+        rm -f /usr/bin/jellyfin
+
+        # Remove user and group
+        if getent passwd jellyfin > /dev/null; then
+            deluser --quiet jellyfin || true
+        fi
+        if getent group jellyfin > /dev/null; then
+            delgroup --quiet jellyfin || true
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        # Stop service
+        if command -v systemctl > /dev/null; then
+            systemctl stop jellyfin.service || true
+            systemctl disable jellyfin.service || true
+        fi
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
