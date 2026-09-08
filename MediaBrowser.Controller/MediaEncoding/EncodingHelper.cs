@@ -54,6 +54,7 @@ namespace MediaBrowser.Controller.MediaEncoding
         private const string D3d11vaAlias = "dx11";
         private const string VideotoolboxAlias = "vt";
         private const string RkmppAlias = "rk";
+        private const string V4l2m2mAlias = "v4l";
         private const string OpenclAlias = "ocl";
         private const string CudaAlias = "cu";
         private const string DrmAlias = "dr";
@@ -145,7 +146,8 @@ namespace MediaBrowser.Controller.MediaEncoding
             { HardwareAccelerationType.vaapi, _defaultMjpegEncoder + "_vaapi" },
             { HardwareAccelerationType.qsv, _defaultMjpegEncoder + "_qsv" },
             { HardwareAccelerationType.videotoolbox, _defaultMjpegEncoder + "_videotoolbox" },
-            { HardwareAccelerationType.rkmpp, _defaultMjpegEncoder + "_rkmpp" }
+            { HardwareAccelerationType.rkmpp, _defaultMjpegEncoder + "_rkmpp" },
+            { HardwareAccelerationType.v4l2m2m, _defaultMjpegEncoder + "_v4l2m2m" }
         };
 
         public static readonly string[] LosslessAudioCodecs =
@@ -298,6 +300,16 @@ namespace MediaBrowser.Controller.MediaEncoding
                    && _mediaEncoder.SupportsFilter("scale_rkrga")
                    && _mediaEncoder.SupportsFilter("vpp_rkrga")
                    && _mediaEncoder.SupportsFilter("overlay_rkrga");
+        }
+
+        private bool IsV4l2m2mOclTonemapSupported()
+        {
+            // V4L2M2M with OpenCL tonemapping support.
+            // Note: CIX SoC FFmpeg 5.1.6 tonemap_opencl doesn't support bt2390,
+            // so we only check basic OpenCL tonemap filter availability.
+            // We don't need scale_opencl since we use software scale before hwupload.
+            return _mediaEncoder.SupportsHwaccel("opencl")
+                   && _mediaEncoder.SupportsFilter("tonemap_opencl");
         }
 
         private bool IsOpenclFullSupported()
@@ -835,6 +847,16 @@ namespace MediaBrowser.Controller.MediaEncoding
             return " -init_hw_device rkmpp=" + alias;
         }
 
+        private string GetV4l2m2mDeviceArgs(string devicePath, string alias)
+        {
+            alias ??= V4l2m2mAlias;
+
+            // V4L2M2M doesn't use init_hw_device, decoder/encoder will auto-select device.
+            // If a specific device is provided, we can pass it via -hwaccel_device.
+            // For now, return empty as V4L2M2M auto-detects the device.
+            return string.Empty;
+        }
+
         private string GetVideoToolboxDeviceArgs(string alias)
         {
             alias ??= VideotoolboxAlias;
@@ -1230,6 +1252,32 @@ namespace MediaBrowser.Controller.MediaEncoding
                 }
 
                 args.Append(filterDevArgs);
+            }
+            else if (optHwaccelType == HardwareAccelerationType.v4l2m2m)
+            {
+                if (!isLinux)
+                {
+                    return string.Empty;
+                }
+
+                var isV4l2m2mDecoder = vidDecoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+                var isV4l2m2mEncoder = vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+                if (!isV4l2m2mDecoder && !isV4l2m2mEncoder)
+                {
+                    return string.Empty;
+                }
+
+                // V4L2M2M doesn't require explicit hw device initialization.
+                // The decoder/encoder will auto-select the appropriate V4L2 device.
+
+                // Initialize OpenCL device for tonemapping if supported
+                var doOclTonemap = isHwTonemapAvailable && IsV4l2m2mOclTonemapSupported();
+                if (doOclTonemap)
+                {
+                    // For V4L2M2M, we use software upload to OpenCL since DMA-buf is not available
+                    args.Append(GetOpenclDeviceArgs(0, null, null, OpenclAlias));
+                    args.Append(GetFilterHwDeviceArgs(OpenclAlias));
+                }
             }
 
             if (!string.IsNullOrEmpty(vidDecoder))
@@ -2295,9 +2343,9 @@ namespace MediaBrowser.Controller.MediaEncoding
 
             if (!string.IsNullOrEmpty(profile))
             {
-                // Currently there's no profile option in av1_nvenc encoder
+                // Currently there's no profile option in av1_nvenc and v4l2m2m encoders
                 if (!(string.Equals(videoEncoder, "av1_nvenc", StringComparison.OrdinalIgnoreCase)
-                      || string.Equals(videoEncoder, "h264_v4l2m2m", StringComparison.OrdinalIgnoreCase)))
+                      || (videoEncoder is not null && videoEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase))))
                 {
                     param += " -profile:v:0 " + profile;
                 }
@@ -2361,6 +2409,10 @@ namespace MediaBrowser.Controller.MediaEncoding
                          || string.Equals(videoEncoder, "hevc_rkmpp", StringComparison.OrdinalIgnoreCase))
                 {
                     param += " -level " + level;
+                }
+                else if (videoEncoder is not null && videoEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase))
+                {
+                    // V4L2M2M encoders do not support the level option
                 }
                 else if (!string.Equals(videoEncoder, "libx265", StringComparison.OrdinalIgnoreCase))
                 {
@@ -3483,7 +3535,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             int? requestedMaxWidth,
             int? requestedMaxHeight)
         {
-            var isV4l2 = string.Equals(videoEncoder, "h264_v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2 = videoEncoder is not null && videoEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
             var isMjpeg = videoEncoder is not null && videoEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             var scaleVal = isV4l2 ? 64 : 2;
             var targetAr = isMjpeg ? "(a*sar)" : "a"; // manually calculate AR when using mjpeg encoder
@@ -3874,7 +3926,7 @@ namespace MediaBrowser.Controller.MediaEncoding
             var vidDecoder = GetHardwareVideoDecoder(state, options) ?? string.Empty;
             var isSwDecoder = string.IsNullOrEmpty(vidDecoder);
             var isVaapiEncoder = vidEncoder.Contains("vaapi", StringComparison.OrdinalIgnoreCase);
-            var isV4l2Encoder = vidEncoder.Contains("h264_v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2Encoder = vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
 
             var doDeintH2645 = IsDeinterlaceAvailable(state);
             var doToneMap = IsSwTonemapAvailable(state, options);
@@ -3904,13 +3956,21 @@ namespace MediaBrowser.Controller.MediaEncoding
 
             var outFormat = isSwDecoder ? "yuv420p" : "nv12";
             var swScaleFilter = GetSwScaleFilter(state, options, vidEncoder, swpInW, swpInH, threeDFormat, reqW, reqH, reqMaxW, reqMaxH);
+            var isV4l2MjpegEncoder = isV4l2Encoder && vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
             if (isVaapiEncoder)
             {
                 outFormat = "nv12";
             }
-            else if (isV4l2Encoder)
+            else if (isV4l2Encoder && !isV4l2MjpegEncoder)
             {
+                // V4L2M2M video encoders (h264, hevc, etc.) require yuv420p
+                // but V4L2M2M MJPEG encoder requires nv12
                 outFormat = "yuv420p";
+            }
+            else if (isV4l2MjpegEncoder)
+            {
+                // V4L2M2M MJPEG encoder requires nv12 format
+                outFormat = "nv12";
             }
 
             // sw scale
@@ -5983,6 +6043,156 @@ namespace MediaBrowser.Controller.MediaEncoding
             return (null, null, null);
         }
 
+        /// <summary>
+        /// Gets the video filter chain for V4L2M2M hardware acceleration with OpenCL tonemapping.
+        /// </summary>
+        /// <param name="state">Encoding state.</param>
+        /// <param name="options">Encoding options.</param>
+        /// <param name="vidEncoder">Video encoder to use.</param>
+        /// <returns>The tuple contains three lists: main, sub and overlay filters.</returns>
+        public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetV4l2m2mVidFilterChain(
+            EncodingJobInfo state,
+            EncodingOptions options,
+            string vidEncoder)
+        {
+            if (options.HardwareAccelerationType != HardwareAccelerationType.v4l2m2m)
+            {
+                return (null, null, null);
+            }
+
+            var isLinux = OperatingSystem.IsLinux();
+            var vidDecoder = GetHardwareVideoDecoder(state, options) ?? string.Empty;
+            var isSwDecoder = string.IsNullOrEmpty(vidDecoder);
+            var isSwEncoder = !vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2m2mOclSupported = isLinux && IsV4l2m2mOclTonemapSupported();
+            var doOclTonemap = IsHwTonemapAvailable(state, options) && isV4l2m2mOclSupported;
+
+            // If no tonemapping needed or OpenCL not supported, use software filter chain
+            if (!doOclTonemap)
+            {
+                return GetSwVidFilterChain(state, options, vidEncoder);
+            }
+
+            // V4L2M2M + OpenCL tonemapping pipeline
+            return GetV4l2m2mVidFiltersPrefered(state, options, vidDecoder, vidEncoder);
+        }
+
+        /// <summary>
+        /// Gets the preferred V4L2M2M video filters with OpenCL tonemapping support.
+        /// Pipeline: V4L2M2M decode, format=p010le, hwupload=opencl, tonemap_opencl, hwdownload, V4L2M2M encode.
+        /// </summary>
+        /// <param name="state">Encoding state.</param>
+        /// <param name="options">Encoding options.</param>
+        /// <param name="vidDecoder">Video decoder to use.</param>
+        /// <param name="vidEncoder">Video encoder to use.</param>
+        /// <returns>The tuple contains three lists: main, sub and overlay filters.</returns>
+        public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetV4l2m2mVidFiltersPrefered(
+            EncodingJobInfo state,
+            EncodingOptions options,
+            string vidDecoder,
+            string vidEncoder)
+        {
+            var inW = state.VideoStream?.Width;
+            var inH = state.VideoStream?.Height;
+            var reqW = state.BaseRequest.Width;
+            var reqH = state.BaseRequest.Height;
+            var reqMaxW = state.BaseRequest.MaxWidth;
+            var reqMaxH = state.BaseRequest.MaxHeight;
+            var threeDFormat = state.MediaSource.Video3DFormat;
+
+            var isV4l2m2mDecoder = vidDecoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isV4l2m2mEncoder = vidEncoder.Contains("v4l2m2m", StringComparison.OrdinalIgnoreCase);
+            var isSwDecoder = !isV4l2m2mDecoder;
+            var isSwEncoder = !isV4l2m2mEncoder;
+            var isMjpegEncoder = vidEncoder.Contains("mjpeg", StringComparison.OrdinalIgnoreCase);
+
+            var doDeintH264 = state.DeInterlace("h264", true) || state.DeInterlace("avc", true);
+            var doDeintHevc = state.DeInterlace("h265", true) || state.DeInterlace("hevc", true);
+            var doDeintH2645 = doDeintH264 || doDeintHevc;
+            var doOclTonemap = IsHwTonemapAvailable(state, options) && IsV4l2m2mOclTonemapSupported();
+
+            var hasSubs = state.SubtitleStream is not null && ShouldEncodeSubtitle(state);
+            var hasTextSubs = hasSubs && state.SubtitleStream.IsTextSubtitleStream;
+            var hasGraphicalSubs = hasSubs && !state.SubtitleStream.IsTextSubtitleStream;
+
+            var rotation = state.VideoStream?.Rotation ?? 0;
+            var transposeDir = rotation == 0 ? string.Empty : GetVideoTransposeDirection(state);
+            var doSwTranspose = !string.IsNullOrEmpty(transposeDir);
+            var swapWAndH = Math.Abs(rotation) == 90 && doSwTranspose;
+            var swpInW = swapWAndH ? inH : inW;
+            var swpInH = swapWAndH ? inW : inH;
+
+            /* Make main filters for video stream */
+            var mainFilters = new List<string>();
+
+            mainFilters.Add(GetOverwriteColorPropertiesParam(state, doOclTonemap));
+
+            // V4L2M2M decodes to CPU memory, so we process in software first
+            // sw deint
+            if (doDeintH2645)
+            {
+                var swDeintFilter = GetSwDeinterlaceFilter(state, options);
+                mainFilters.Add(swDeintFilter);
+            }
+
+            // sw transpose
+            if (doSwTranspose)
+            {
+                mainFilters.Add($"transpose={transposeDir}");
+            }
+
+            // For HDR tonemapping, we need p010le format for OpenCL
+            var outFormat = doOclTonemap ? "p010le" : (hasGraphicalSubs ? "yuv420p" : "nv12");
+            var swScaleFilter = GetSwScaleFilter(state, options, vidEncoder, swpInW, swpInH, threeDFormat, reqW, reqH, reqMaxW, reqMaxH);
+
+            // sw scale
+            mainFilters.Add(swScaleFilter);
+            mainFilters.Add($"format={outFormat}");
+
+            // OpenCL tonemapping
+            if (doOclTonemap)
+            {
+                // Upload to OpenCL (using -filter_hw_device, not format=opencl)
+                mainFilters.Add("hwupload");
+
+                // Apply tonemapping
+                var tonemapFilter = GetHwTonemapFilter(options, "opencl", "nv12", isMjpegEncoder);
+                mainFilters.Add(tonemapFilter);
+
+                // Download back to CPU memory for V4L2M2M encoder
+                mainFilters.Add("hwdownload");
+                mainFilters.Add("format=nv12");
+            }
+
+            // text subtitles (after tonemapping, on CPU)
+            if (hasTextSubs)
+            {
+                var textSubtitlesFilter = GetTextSubtitlesFilter(state, false, false);
+                mainFilters.Add(textSubtitlesFilter);
+            }
+
+            /* Make sub and overlay filters for subtitle stream */
+            var subFilters = new List<string>();
+            var overlayFilters = new List<string>();
+
+            if (hasGraphicalSubs)
+            {
+                // Use software overlay for graphical subtitles
+                var subW = state.SubtitleStream?.Width;
+                var subH = state.SubtitleStream?.Height;
+                var subPreProcFilters = GetGraphicalSubPreProcessFilters(swpInW, swpInH, subW, subH, reqW, reqH, reqMaxW, reqMaxH);
+                subFilters.Add(subPreProcFilters);
+                subFilters.Add("format=bgra");
+            }
+
+            if (hasGraphicalSubs)
+            {
+                overlayFilters.Add("overlay=eof_action=pass:shortest=1:repeatlast=0");
+            }
+
+            return (mainFilters, subFilters, overlayFilters);
+        }
+
         public (List<string> MainFilters, List<string> SubFilters, List<string> OverlayFilters) GetRkmppVidFiltersPrefered(
             EncodingJobInfo state,
             EncodingOptions options,
@@ -6263,6 +6473,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                 HardwareAccelerationType.nvenc => GetNvidiaVidFilterChain(state, options, outputVideoCodec),
                 HardwareAccelerationType.videotoolbox => GetAppleVidFilterChain(state, options, outputVideoCodec),
                 HardwareAccelerationType.rkmpp => GetRkmppVidFilterChain(state, options, outputVideoCodec),
+                HardwareAccelerationType.v4l2m2m => GetV4l2m2mVidFilterChain(state, options, outputVideoCodec),
                 _ => GetSwVidFilterChain(state, options, outputVideoCodec),
             };
 
@@ -6512,6 +6723,7 @@ namespace MediaBrowser.Controller.MediaEncoding
                     HardwareAccelerationType.nvenc => GetNvdecVidDecoder(state, options, videoStream, bitDepth),
                     HardwareAccelerationType.videotoolbox => GetVideotoolboxVidDecoder(state, options, videoStream, bitDepth),
                     HardwareAccelerationType.rkmpp => GetRkmppVidDecoder(state, options, videoStream, bitDepth),
+                    HardwareAccelerationType.v4l2m2m => GetV4l2m2mVidDecoder(state, options, videoStream, bitDepth),
                     _ => string.Empty
                 };
 
@@ -6560,6 +6772,13 @@ namespace MediaBrowser.Controller.MediaEncoding
                 if (string.Equals(videoCodec, "vp9", StringComparison.OrdinalIgnoreCase)
                     && options.HardwareDecodingCodecs.Contains("vp9", StringComparison.OrdinalIgnoreCase)
                     && !options.EnableDecodingColorDepth10Vp9)
+                {
+                    return null;
+                }
+
+                if (string.Equals(videoCodec, "av1", StringComparison.OrdinalIgnoreCase)
+                    && options.HardwareDecodingCodecs.Contains("av1", StringComparison.OrdinalIgnoreCase)
+                    && !options.EnableDecodingColorDepth10Av1)
                 {
                     return null;
                 }
@@ -7186,6 +7405,107 @@ namespace MediaBrowser.Controller.MediaEncoding
                 {
                     // there's an issue about AV1 AFBC on RK3588, disable it for now until it's fixed upstream
                     return GetHwaccelType(state, options, "av1", bitDepth, hwSurface);
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets a V4L2M2M video decoder.
+        /// </summary>
+        /// <param name="state">Encoding state.</param>
+        /// <param name="options">Encoding options.</param>
+        /// <param name="videoStream">Video stream.</param>
+        /// <param name="bitDepth">Video color bit depth.</param>
+        /// <returns>V4L2M2M video decoder.</returns>
+        public string GetV4l2m2mVidDecoder(EncodingJobInfo state, EncodingOptions options, MediaStream videoStream, int bitDepth)
+        {
+            var isLinux = OperatingSystem.IsLinux();
+
+            if (!isLinux
+                || options.HardwareAccelerationType != HardwareAccelerationType.v4l2m2m)
+            {
+                return null;
+            }
+
+            var videoCodec = videoStream.Codec;
+
+            // V4L2M2M supported formats: H.264, HEVC, MPEG1, MPEG2, MPEG4, VC1, VP8, VP9, AV1
+            // Check pixel formats - V4L2M2M typically supports 8-bit and some 10-bit formats
+            var is8bitSwFormatsV4l2 = string.Equals("yuv420p", videoStream.PixelFormat, StringComparison.OrdinalIgnoreCase)
+                                      || string.Equals("yuvj420p", videoStream.PixelFormat, StringComparison.OrdinalIgnoreCase);
+            var is10bitSwFormatsV4l2 = string.Equals("yuv420p10le", videoStream.PixelFormat, StringComparison.OrdinalIgnoreCase);
+            var is8_10bitSwFormatsV4l2 = is8bitSwFormatsV4l2 || is10bitSwFormatsV4l2;
+
+            // For 10-bit content, check if user has enabled 10-bit decoding
+            if (is10bitSwFormatsV4l2)
+            {
+                if (string.Equals(videoCodec, "hevc", StringComparison.OrdinalIgnoreCase)
+                    && !options.EnableDecodingColorDepth10Hevc)
+                {
+                    return null;
+                }
+
+                if (string.Equals(videoCodec, "vp9", StringComparison.OrdinalIgnoreCase)
+                    && !options.EnableDecodingColorDepth10Vp9)
+                {
+                    return null;
+                }
+            }
+
+            // 8-bit only codecs
+            if (is8bitSwFormatsV4l2)
+            {
+                if (string.Equals(videoCodec, "mpeg1video", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "mpeg1", "v4l2m2m", "mpeg1video", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "mpeg2video", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "mpeg2", "v4l2m2m", "mpeg2video", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "mpeg4", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "mpeg4", "v4l2m2m", "mpeg4", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "vc1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "vc1", "v4l2m2m", "vc1", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "vp8", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "vp8", "v4l2m2m", "vp8", bitDepth);
+                }
+            }
+
+            // 8-bit and 10-bit codecs
+            if (is8_10bitSwFormatsV4l2)
+            {
+                if (string.Equals(videoCodec, "h264", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(videoCodec, "avc", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "h264", "v4l2m2m", "h264", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "hevc", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(videoCodec, "h265", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "hevc", "v4l2m2m", "hevc", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "vp9", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "vp9", "v4l2m2m", "vp9", bitDepth);
+                }
+
+                if (string.Equals(videoCodec, "av1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return GetHwDecoderName(options, "av1", "v4l2m2m", "av1", bitDepth);
                 }
             }
 

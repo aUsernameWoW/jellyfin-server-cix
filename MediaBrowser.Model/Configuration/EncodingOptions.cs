@@ -30,6 +30,8 @@ public class EncodingOptions
         // plus it's the default one in ffmpeg if you don't specify anything
         VaapiDevice = "/dev/dri/renderD128";
         QsvDevice = string.Empty;
+        // V4L2M2M device path, commonly /dev/video-dec0 or auto-detected
+        V4l2m2mDevice = string.Empty;
         EnableTonemapping = false;
         EnableVppTonemapping = false;
         EnableVideoToolboxTonemapping = false;
@@ -48,6 +50,7 @@ public class EncodingOptions
         DeinterlaceMethod = DeinterlaceMethod.yadif;
         EnableDecodingColorDepth10Hevc = true;
         EnableDecodingColorDepth10Vp9 = true;
+        EnableDecodingColorDepth10Av1 = false;
         EnableDecodingColorDepth10HevcRext = false;
         EnableDecodingColorDepth12HevcRext = false;
         // Enhanced Nvdec or system native decoder is required for DoVi to SDR tone-mapping.
@@ -151,6 +154,11 @@ public class EncodingOptions
     public string QsvDevice { get; set; }
 
     /// <summary>
+    /// Gets or sets the V4L2M2M device.
+    /// </summary>
+    public string V4l2m2mDevice { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether tonemapping is enabled.
     /// </summary>
     public bool EnableTonemapping { get; set; }
@@ -239,6 +247,11 @@ public class EncodingOptions
     /// Gets or sets a value indicating whether 10bit VP9 decoding is enabled.
     /// </summary>
     public bool EnableDecodingColorDepth10Vp9 { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether 10bit AV1 decoding is enabled.
+    /// </summary>
+    public bool EnableDecodingColorDepth10Av1 { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether 8/10bit HEVC RExt decoding is enabled.
