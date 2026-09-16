@@ -38,6 +38,9 @@ jobs:
         with:
           ref: ${{ env.CIX_BRANCH }}
           fetch-depth: 0
+          # PAT with `workflow` scope: the default GITHUB_TOKEN cannot push commits
+          # that touch .github/workflows/, which upstream merges regularly do.
+          token: ${{ secrets.SYNC_TOKEN }}
 
       - name: Resolve upstream tag
         id: upstream
@@ -92,7 +95,7 @@ jobs:
           TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           TITLE="Upstream sync conflict: ${TAG}"
-          EXISTING="$(gh issue list --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number')"
+          EXISTING="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"${TITLE}\" in:title" --json number --jq '.[0].number')"
           if [ -n "$EXISTING" ]; then
             echo "Issue #${EXISTING} already open"
           else
@@ -117,7 +120,7 @@ jobs:
           Then run the **Build Debian Package** workflow (or push tag \`v${TAG#v}-${PACKAGE_REVISION}\`).
           MSG
           )"
-            gh issue create --title "$TITLE" --body "$BODY"
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
           fi
           exit 1
 
@@ -131,5 +134,5 @@ jobs:
           VER="${TAG#v}"
           case "$VER" in *.*.*) ;; *) VER="${VER}.0" ;; esac
           echo "Triggering build for ${VER}-${PACKAGE_REVISION}"
-          gh workflow run build-deb.yml --ref "$CIX_BRANCH" \
+          gh workflow run build-deb.yml -R "$GITHUB_REPOSITORY" --ref "$CIX_BRANCH" \
             -f "version=${VER}-${PACKAGE_REVISION}" -f "release=true"
