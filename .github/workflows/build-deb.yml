@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     outputs:
       version: ${{ steps.version.outputs.version }}
+      upstream: ${{ steps.version.outputs.upstream }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +53,7 @@ jobs:
             VERSION="${BASE}-cix1~git$(date -u +%Y%m%d).${GITHUB_SHA::7}"
           fi
           echo "version=$VERSION" | tee -a "$GITHUB_OUTPUT"
+          echo "upstream=$(tr -d '[:space:]' < .github/upstream-base)" | tee -a "$GITHUB_OUTPUT"
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -119,26 +121,47 @@ jobs:
           body: |
             ## Jellyfin Server CIX
 
-            Jellyfin Media Server with V4L2M2M hardware acceleration support for CIX SoC.
-            Built from this repository at `${{ github.sha }}`.
+            Jellyfin Media Server with V4L2M2M hardware acceleration for CIX SoCs (e.g. Radxa Orion O6).
+
+            - Based on upstream Jellyfin [${{ needs.build.outputs.upstream }}](https://github.com/jellyfin/jellyfin/releases/tag/${{ needs.build.outputs.upstream }})
+            - Built from commit [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
 
             ### Features
             - V4L2M2M hardware decoding (H.264, HEVC, VP8, VP9, AV1, MPEG-1/2/4, VC-1) and encoding (H.264, HEVC, VP8)
             - OpenCL HDR to SDR tonemapping
             - V4L2M2M MJPEG for Trickplay thumbnail generation
 
+            ### Downloads
+            | Package | Where to get it |
+            | --- | --- |
+            | `jellyfin-server-cix` | Attached to this release (below) |
+            | `jellyfin-web-cix` (same version) | [jellyfin-web-cix releases](https://github.com/aUsernameWoW/jellyfin-web-cix/releases) |
+            | `cix-ffmpeg` + `cix-libav*` (FFmpeg for CIX) | [radxa-pkg/cix-prebuilt releases](https://github.com/radxa-pkg/cix-prebuilt/releases) |
+
             ### Installation
-            ```bash
-            sudo dpkg -i jellyfin-server-cix_*.deb jellyfin-web-cix_*.deb
-            sudo apt-get install -f
-            ```
+            1. **FFmpeg for CIX**: download `cix-ffmpeg` and the four `cix-libav*` packages from the latest
+               [cix-prebuilt release](https://github.com/radxa-pkg/cix-prebuilt/releases), then install them:
+               ```bash
+               sudo apt install ./cix-ffmpeg_*.deb ./cix-libav*.deb libavdevice59 libpostproc56 libswresample4 libswscale6
+               ```
+            2. **Jellyfin**: install the server together with the web client of the same version from
+               [jellyfin-web-cix releases](https://github.com/aUsernameWoW/jellyfin-web-cix/releases):
+               ```bash
+               sudo apt install ./jellyfin-server-cix_*.deb ./jellyfin-web-cix_*.deb
+               ```
+            3. **Check `/etc/default/jellyfin`**: fresh installs already ship these defaults. If you kept an older copy
+               of the file during an upgrade (e.g. from the official `jellyfin-server` package), add them:
+               ```bash
+               JELLYFIN_WEB_OPT="--webdir=/usr/share/jellyfin/web"
+               JELLYFIN_FFMPEG_OPT="--ffmpeg=/usr/share/cix/bin/ffmpeg"
+               LD_LIBRARY_PATH="/usr/share/cix/lib"
+               ```
+               then run `sudo systemctl restart jellyfin`.
+            4. In **Dashboard → Playback → Transcoding**, set **Hardware acceleration** to **V4L2M2M**.
 
-            ### FFmpeg
-            Point `JELLYFIN_FFMPEG_OPT` in `/etc/default/jellyfin` at an FFmpeg with V4L2M2M support
-            (the CIX-patched `ffmpeg` package, or `jellyfin-ffmpeg8`).
-
-            ### Related Packages
-            - `jellyfin-web-cix` - matching web interface
+            > [!TIP]
+            > If the system already has a CIX-patched `ffmpeg` package (version ending in `+cix`) at `/usr/bin/ffmpeg`,
+            > you can skip step 1, set `JELLYFIN_FFMPEG_OPT="--ffmpeg=/usr/bin/ffmpeg"` and leave out `LD_LIBRARY_PATH`.
           files: artifacts/*.deb
           draft: false
           prerelease: false
