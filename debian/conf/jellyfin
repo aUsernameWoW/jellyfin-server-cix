@@ -1,5 +1,6 @@
 # Jellyfin default configuration for CIX
-# This is the configuration file for the jellyfin service
+# Loaded by jellyfin.service as an EnvironmentFile. systemd does not expand
+# variables inside this file, so every value must be written out in full.
 
 # Directory where program data is stored
 JELLYFIN_DATA_DIR="/var/lib/jellyfin"
@@ -13,17 +14,19 @@ JELLYFIN_LOG_DIR="/var/log/jellyfin"
 # Directory where cache is stored
 JELLYFIN_CACHE_DIR="/var/cache/jellyfin"
 
-# Web directory for jellyfin-web-cix
-JELLYFIN_WEB_DIR="/usr/share/jellyfin/web"
+# Web client installed by jellyfin-web-cix
+JELLYFIN_WEB_OPT="--webdir=/usr/share/jellyfin/web"
 
-# FFmpeg location (use ffmpeg-cix for V4L2M2M hardware acceleration)
-JELLYFIN_FFMPEG_PATH="/usr/lib/jellyfin-ffmpeg/ffmpeg"
+# FFmpeg with V4L2M2M support. The default is the cix-ffmpeg package from
+# https://github.com/radxa-pkg/cix-prebuilt/releases, whose libraries live in
+# /usr/share/cix/lib (not on the default linker path).
+# To use another FFmpeg (e.g. a CIX-patched /usr/bin/ffmpeg), change the path
+# below and remove LD_LIBRARY_PATH.
+JELLYFIN_FFMPEG_OPT="--ffmpeg=/usr/share/cix/bin/ffmpeg"
+LD_LIBRARY_PATH="/usr/share/cix/lib"
 
-# User to run the service as
-JELLYFIN_USER="jellyfin"
+# Uncomment to run without hosting the web client
+#JELLYFIN_NOWEBAPP_OPT="--nowebclient"
 
-# Additional options
+# Additional command line options
 JELLYFIN_ADDITIONAL_OPTS=""
-
-# Combine all options
-JELLYFIN_ARGS="--datadir=${JELLYFIN_DATA_DIR} --configdir=${JELLYFIN_CONFIG_DIR} --logdir=${JELLYFIN_LOG_DIR} --cachedir=${JELLYFIN_CACHE_DIR} --webdir=${JELLYFIN_WEB_DIR} --ffmpeg=${JELLYFIN_FFMPEG_PATH} ${JELLYFIN_ADDITIONAL_OPTS}"

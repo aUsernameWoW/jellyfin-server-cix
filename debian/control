@@ -4,13 +4,13 @@ Priority: optional
 Maintainer: Jellyfin CIX Packaging Team
 Build-Depends: debhelper (>= 9)
 Standards-Version: 3.9.4
-Homepage: https://github.com/radxa-pkg/cix-prebuilt
+Homepage: https://github.com/aUsernameWoW/jellyfin-server-cix
 
 Package: jellyfin-server-cix
 Architecture: arm64
 Depends: ${shlibs:Depends}, ${misc:Depends}, libfontconfig1, adduser
 Recommends: jellyfin-web-cix
-Suggests: ffmpeg-cix
+Suggests: cix-ffmpeg
 Conflicts: jellyfin-server
 Replaces: jellyfin-server
 Provides: jellyfin-server
