@@ -99,6 +99,7 @@
  - [mitchfizz05](https://github.com/mitchfizz05)
  - [mohd-akram](https://github.com/mohd-akram)
  - [MrTimscampi](https://github.com/MrTimscampi)
+ - [myristate](https://github.com/myristate)
  - [n8225](https://github.com/n8225)
  - [Nalsai](https://github.com/Nalsai)
  - [Narfinger](https://github.com/Narfinger)
@@ -248,6 +249,7 @@
  - [TheDreadPirate](https://github.com/thedreaddpirate)
  - [Daniel Aquino](https://github.com/chino)
  - [klizas](https://github.com/klizas)
+ - [p27ZuH6CNAdzr](https://github.com/p27ZuH6CNAdzr)
 
 # Emby Contributors
 
